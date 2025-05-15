@@ -12,6 +12,7 @@ from transformers import Qwen2_5_VLForConditionalGeneration, AutoTokenizer, Auto
 from PIL import Image
 import glob
 from tqdm import tqdm
+import re
 
 warnings.filterwarnings("ignore")
 
@@ -38,13 +39,7 @@ def extract_vision_info(conversations):
     
     return vision_infos
 
-def resize_frame(frame, target_width, target_height):
-    """Resize a frame to the target resolution"""
-    if target_width and target_height:
-        return frame.resize((target_width, target_height), Image.LANCZOS)
-    return frame
-
-def fetch_video(vision_info, return_video_sample_fps=False, target_width=None, target_height=None):
+def fetch_video(vision_info, return_video_sample_fps=False):
     """Fetch and process video with fixed sampling of 16 or 32 frames"""
     video_path = vision_info.get("video")
     if video_path.startswith("file://"):
@@ -76,15 +71,11 @@ def fetch_video(vision_info, return_video_sample_fps=False, target_width=None, t
     frames = vr.get_batch(indices).asnumpy()
     pil_frames = [Image.fromarray(frame) for frame in frames]
     
-    # Resize frames if target resolution is provided
-    if target_width and target_height:
-        pil_frames = [resize_frame(frame, target_width, target_height) for frame in pil_frames]
-    
     if return_video_sample_fps:
         return pil_frames, sample_fps
     return pil_frames
 
-def process_vision_info(conversations, return_video_kwargs=False, target_width=None, target_height=None):
+def process_vision_info(conversations, return_video_kwargs=False):
     """Process visual information, extract images and videos"""
     vision_infos = extract_vision_info(conversations)
     
@@ -104,9 +95,7 @@ def process_vision_info(conversations, return_video_kwargs=False, target_width=N
             # Video processing
             video_input, video_sample_fps = fetch_video(
                 vision_info, 
-                return_video_sample_fps=True,
-                target_width=target_width,
-                target_height=target_height
+                return_video_sample_fps=True
             )
             video_sample_fps_list.append(video_sample_fps)
             video_inputs.append(video_input)
@@ -120,7 +109,7 @@ def process_vision_info(conversations, return_video_kwargs=False, target_width=N
         return image_inputs, video_inputs, {'fps': video_sample_fps_list}
     return image_inputs, video_inputs
 
-def load_video(video_path, max_frames_num, fps=1, force_sample=False, target_width=None, target_height=None):
+def load_video(video_path, max_frames_num, fps=1, force_sample=False):
     """Load video frames to maintain compatibility with old code"""
     if max_frames_num == 0:
         return [Image.new('RGB', (336, 336))], "", 0.0
@@ -138,10 +127,6 @@ def load_video(video_path, max_frames_num, fps=1, force_sample=False, target_wid
         spare_frames = vr.get_batch([middle_frame_idx]).asnumpy()
         pil_frames = [Image.fromarray(frame) for frame in spare_frames]
         
-        # Resize frames if target resolution is provided
-        if target_width and target_height:
-            pil_frames = [resize_frame(frame, target_width, target_height) for frame in pil_frames]
-            
         return pil_frames, frame_time_str, video_time
     
     # Normal case: sample by fps or force sampling
@@ -160,10 +145,6 @@ def load_video(video_path, max_frames_num, fps=1, force_sample=False, target_wid
     # Convert to PIL image list
     pil_frames = [Image.fromarray(frame) for frame in spare_frames]
     
-    # Resize frames if target resolution is provided
-    if target_width and target_height:
-        pil_frames = [resize_frame(frame, target_width, target_height) for frame in pil_frames]
-        
     return pil_frames, frame_time_str, video_time
 
 def extract_selected_option(text_output, num_options):
@@ -182,7 +163,11 @@ def extract_selected_option(text_output, num_options):
                 f"My final answer is Option {option_num}",
                 f"Option {option_num} would be the most accurate",
                 f"I would select Option {option_num}",
-                f"The most accurate feedback is Option {option_num}"
+                f"The most accurate feedback is Option {option_num}",
+                f"Final Answer: {option_num}",
+                f"final answer: {option_num}",
+                f"Final Answer: ({option_num})",
+                f"final answer: ({option_num})"
             ]
             
             for pattern in patterns:
@@ -192,16 +177,37 @@ def extract_selected_option(text_output, num_options):
             
             if selected_option:
                 break
-                
-        # If no pattern match, try to extract just the number
+        
+        # If no pattern match, check if the last line or last few characters contain just a number
+        if selected_option is None:
+            # Check the last line
+            lines = text_output.strip().split('\n')
+            if lines:
+                last_line = lines[-1].strip()
+                # Check if last line is just a number
+                if last_line.isdigit() and 1 <= int(last_line) <= num_options:
+                    selected_option = int(last_line)
+            
+            # If still not found, check the last few characters
+            if selected_option is None:
+                # Remove all whitespace and check last character
+                clean_text = text_output.strip()
+                if clean_text and clean_text[-1].isdigit():
+                    last_digit = int(clean_text[-1])
+                    if 1 <= last_digit <= num_options:
+                        selected_option = last_digit
+        
+        # If still no match, try to extract just the number from the whole text
         if selected_option is None:
             for num in range(1, num_options + 1):
-                if str(num) in text_output:
+                # Use regex to find standalone numbers
+                if re.search(r'\b' + str(num) + r'\b', text_output):
                     selected_option = num
                     break
         
         return selected_option
-    except:
+    except Exception as e:
+        print(f"Error in extract_selected_option: {e}")
         return None
 
 def load_model():
@@ -224,7 +230,7 @@ def load_model():
     print("Model loaded successfully")
     return model, processor
 
-def analyze_video(video_path, json_item, model, processor, max_frames_num=32, target_width=None, target_height=None):
+def analyze_video(video_path, json_item, model, processor, max_frames_num=32):
     """Analyze a single video and return results"""
     video_basename = os.path.basename(video_path)
     video_id = json_item["id"]
@@ -256,13 +262,6 @@ def analyze_video(video_path, json_item, model, processor, max_frames_num=32, ta
         f"Just respond with the option number (1-{len(shuffled_options)}) and nothing else."
     )
     
-    # prompt_text = (
-    #     f"{scenario_prompt}"
-    #     f"Below are different feedback statements about the person's performance in this video:\n\n"
-    #     f"{options_text}\n\n"
-    #     f"Based on what you observe in the video, explain your reasoning step by step to determine which option provides the most accurate feedback. "
-    #     f"Then, output your final answer in the format: 'Final Answer: (X)', where X is the option number (1-{len(shuffled_options)}). Output nothing else."
-    # )
     # Build message format
     messages = [
         {
@@ -280,9 +279,7 @@ def analyze_video(video_path, json_item, model, processor, max_frames_num=32, ta
         
         images, videos, video_kwargs = process_vision_info(
             messages, 
-            return_video_kwargs=True,
-            target_width=target_width,
-            target_height=target_height
+            return_video_kwargs=True
         )
         
         # Apply chat template
@@ -290,7 +287,6 @@ def analyze_video(video_path, json_item, model, processor, max_frames_num=32, ta
             messages, tokenize=False, add_generation_prompt=True
         )
         # Process input
-        # import pudb; pudb.set_trace()
         inputs = processor(
             text=text,
             images=images,  # Can be None
@@ -305,7 +301,7 @@ def analyze_video(video_path, json_item, model, processor, max_frames_num=32, ta
         # Inference: generate output
         with torch.no_grad():
             try:
-                generated_ids = model.generate(**inputs, max_new_tokens=100)
+                generated_ids = model.generate(**inputs, max_new_tokens=500)
                 
                 # Get input_ids from dictionary if it exists
                 if 'input_ids' in inputs:
@@ -333,6 +329,7 @@ def analyze_video(video_path, json_item, model, processor, max_frames_num=32, ta
     
     # Extract selected option
     selected_option = None
+
     for i in range(len(shuffled_options)):
         option_num = i + 1
         if f"Option {option_num}" in output_text or f"option {option_num}" in output_text or str(option_num) in output_text:
@@ -345,7 +342,7 @@ def analyze_video(video_path, json_item, model, processor, max_frames_num=32, ta
             if str(num) in output_text:
                 selected_option = num
                 break
-    
+
     if selected_option:
         original_index = shuffled_indices[selected_option - 1]
         is_correct = (original_index == 0)  # 0 is groundTruth index
@@ -370,7 +367,7 @@ def analyze_video(video_path, json_item, model, processor, max_frames_num=32, ta
         "original_indices": shuffled_indices
     }
 
-def process_videos(video_dir, json_file, max_frames_num=32, target_width=None, target_height=None):
+def process_videos(video_dir, json_file, max_frames_num=32):
     """Process all videos in a directory and calculate overall accuracy"""
     # Load JSON data
     print(f"Loading options from {json_file}...")
@@ -408,7 +405,7 @@ def process_videos(video_dir, json_file, max_frames_num=32, target_width=None, t
     skipped_count = 0
     
     # Create results directory to prevent losing progress
-    result_dir = os.path.join(os.path.dirname(video_dir), "qwen_results_72b")
+    result_dir = os.path.join(os.path.dirname(video_dir), "qwen_results_72b_32_default")
     os.makedirs(result_dir, exist_ok=True)
     
     for video_path in tqdm(video_files):
@@ -439,9 +436,7 @@ def process_videos(video_dir, json_file, max_frames_num=32, target_width=None, t
                 json_item, 
                 model, 
                 processor, 
-                max_frames_num,
-                target_width=target_width,
-                target_height=target_height
+                max_frames_num
             )
             
             # Save individual result
@@ -473,9 +468,7 @@ def process_videos(video_dir, json_file, max_frames_num=32, target_width=None, t
                     json_item, 
                     model, 
                     processor, 
-                    max_frames_num,
-                    target_width=target_width,
-                    target_height=target_height
+                    max_frames_num
                 )
                 
                 # Save individual result
@@ -543,7 +536,7 @@ def process_videos(video_dir, json_file, max_frames_num=32, target_width=None, t
     print(f"  Non-GE: {non_ge_accuracy:.2%} ({non_ge_correct}/{non_ge_total})")
     
     # Save results to file
-    output_file = os.path.join(os.path.dirname(video_dir), "qwen_video_analysis_results_72b.json")
+    output_file = os.path.join(os.path.dirname(video_dir), "qwen_video_analysis_results_72b_32_part2.json")
     with open(output_file, 'w') as f:
         json.dump({
             "overall": {
@@ -572,7 +565,7 @@ def process_videos(video_dir, json_file, max_frames_num=32, target_width=None, t
     
     return results
 
-def analyze_single_video(video_path, json_file, max_frames_num=32, target_width=None, target_height=None):
+def analyze_single_video(video_path, json_file, max_frames_num=32):
     """Analyze a single video file with options from a JSON file"""
     print(f"Loading options from {json_file}...")
     with open(json_file, 'r') as f:
@@ -595,9 +588,7 @@ def analyze_single_video(video_path, json_file, max_frames_num=32, target_width=
         json_item, 
         model, 
         processor, 
-        max_frames_num,
-        target_width=target_width,
-        target_height=target_height
+        max_frames_num
     )
     
     return result
@@ -606,16 +597,12 @@ def main():
     parser = argparse.ArgumentParser(description="Analyze video options using Qwen2.5-VL model")
     parser.add_argument("--video", type=str, default="",
                        help="Path to a single video file (for individual analysis)")
-    parser.add_argument("--video_dir", type=str, default="video_clips",
+    parser.add_argument("--video_dir", type=str, default="/mnt/bum/hanyi/repo/VLM/video_clips_final",
                        help="Directory containing video files (for batch processing)")
-    parser.add_argument("--json", type=str, default="exact.json",
+    parser.add_argument("--json", type=str, default="/mnt/bum/hanyi/repo/VLM/exact.json",
                        help="Path to JSON file containing options")
     parser.add_argument("--frames", type=int, default=32,
                        help="Fixed number of frames to sample from each video, recommended 16 or 32")
-    parser.add_argument("--width", type=int, default=None,
-                       help="Target width for video frames (optional)")
-    parser.add_argument("--height", type=int, default=None,
-                       help="Target height for video frames (optional)")
     
     args = parser.parse_args()
     
@@ -623,22 +610,18 @@ def main():
     os.environ["QWEN_VL_MAX_VIDEO_FRAMES"] = str(args.frames)
     print(f"Setting fixed frame sampling: {args.frames}")
     
-    # Print resolution settings if provided
-    if args.width and args.height:
-        print(f"Setting video resolution to {args.width}x{args.height}")
-    
     if args.video and os.path.exists(args.video):
         # Analyze a single video
         if not os.path.exists(args.json):
             print(f"Error: JSON file not found at {args.json}")
             return
-        analyze_single_video(args.video, args.json, args.frames, args.width, args.height)
+        analyze_single_video(args.video, args.json, args.frames)
     elif args.video_dir and os.path.exists(args.video_dir):
         # Process multiple videos in directory
         if not os.path.exists(args.json):
             print(f"Error: JSON file not found at {args.json}")
             return
-        process_videos(args.video_dir, args.json, args.frames, args.width, args.height)
+        process_videos(args.video_dir, args.json, args.frames)
     else:
         print("Error: Either --video or --video_dir must be provided with a valid path")
         parser.print_help()

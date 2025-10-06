@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# NOTE: This legacy script has been superseded by the unified CLI:
+#   python scripts/evaluate.py --model gemini --video_dir ... --metadata ...
 
 import base64
 import cv2
@@ -96,9 +98,7 @@ def analyze_video(video_path, json_item, api_key, max_frames=64):
     
     client = genai.Client(api_key=api_key)
     response = client.models.generate_content(
-        # model='models/gemini-2.5-pro-latest',
         model='models/gemini-1.5-pro',
-        # model='models/gemini-2.5-pro-exp-03-25',
         contents=types.Content(
             parts=[
                 types.Part(

@@ -246,8 +246,8 @@ To evaluate existing models like LLaVA-OneVision, use the following commands:
 
 ```bash
 git clone https://github.com/Texaser/Exact/
-pip install -r requirements.txt
 cd Exact
+pip install -r requirements.txt
 
 # Update --video_dir to point to your data directory
 python eval/llava-one-vision.py --video_dir ./data --json ./data/metadata.jsonl

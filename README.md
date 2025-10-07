@@ -228,6 +228,33 @@ print(f"Loaded {len(frames)} frames")
 
 ---
 
+## 🔬 Evaluation
+
+### Using Our Provided Evaluation Script
+
+#### Option 1: Evaluate with Your Own Model
+
+To evaluate your own model on ExAct, follow these simple steps:
+
+1. **Initialize your model** at [lines 18-42](https://github.com/Texaser/Exact/blob/main/eval/llava-one-vision.py#L18-L42) in the evaluation script
+
+2. **Write the inference code** at [lines 159-267](https://github.com/Texaser/Exact/blob/main/eval/llava-one-vision.py#L159-L267)
+
+#### Option 2: Evaluate Existing Models
+
+To evaluate existing models like LLaVA-OneVision, use the following commands:
+
+```bash
+git clone https://github.com/Texaser/Exact/
+pip install -r requirements.txt
+cd Exact
+
+# Update --video_dir to point to your data directory
+python eval/llava-one-vision.py --video_dir ./data --json ./data/metadata.jsonl
+```
+
+---
+
 ## 📄 Citation
 
 If you use this dataset in your research, please cite:
